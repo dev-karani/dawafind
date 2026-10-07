@@ -1,0 +1,514 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────── Enums ─────────────────────────
+
+enum Role {
+  PATIENT
+  PHARMACY_STAFF
+  PHARMACY_ADMIN
+  PLATFORM_ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+  SUSPENDED
+}
+
+enum StaffRole {
+  PHARMACY_STAFF
+  PHARMACY_ADMIN
+}
+
+enum StaffStatus {
+  ACTIVE
+  REMOVED
+}
+
+enum MedicineStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum StockStatus {
+  IN_STOCK
+  LIMITED
+  OUT_OF_STOCK
+}
+
+enum ReservationStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+  EXPIRED
+  COLLECTED
+  CANCELLED
+}
+
+enum ConfirmationStatus {
+  PENDING
+  CONFIRMED
+  UNAVAILABLE
+  EXPIRED
+}
+
+enum PrescriptionStatus {
+  UPLOADED
+  UNDER_REVIEW
+  VERIFIED_BY_PHARMACY
+  REJECTED
+  COMPLETED
+  EXPIRED
+}
+
+enum Fulfilment {
+  PICKUP
+  DELIVERY
+}
+
+enum OrderStatus {
+  PENDING
+  ACCEPTED
+  PREPARING
+  DISPATCHED
+  COMPLETED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PAID
+  REFUNDED
+}
+
+enum RefundStatus {
+  NONE
+  REQUESTED
+  REFUNDED
+  REJECTED
+}
+
+enum NotificationType {
+  RESERVATION_REQUEST
+  RESERVATION_CONFIRMED
+  RESERVATION_REJECTED
+  STOCK_REQUEST
+  STOCK_CONFIRMED
+  STOCK_AVAILABLE
+  ORDER_UPDATE
+  PRESCRIPTION_UPDATE
+  SYSTEM
+}
+
+enum AlertStatus {
+  ACTIVE
+  NOTIFIED
+  CANCELLED
+}
+
+enum PlanStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+enum ImpressionKind {
+  SEARCH_APPEARANCE
+  PROFILE_VIEW
+}
+
+// ───────────────────────── Identity ─────────────────────────
+
+model User {
+  id           String     @id @default(cuid())
+  fullName     String
+  email        String     @unique
+  phone        String?
+  passwordHash String
+  role         Role
+  status       UserStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  patientProfile     PatientProfile?
+  staffMemberships   PharmacyStaff[]
+  sessions           Session[]
+  resetTokens        PasswordResetToken[]
+  reservations       Reservation[]
+  stockConfirmations StockConfirmation[]
+  orders             Order[]
+  prescriptions      Prescription[]
+  alerts             AvailabilityAlert[]
+  notifications      Notification[]
+  savedPharmacies    SavedPharmacy[]
+  searchEvents       SearchEvent[]
+  auditLogs          AuditLog[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PatientProfile {
+  id                   String    @id @default(cuid())
+  userId               String    @unique
+  defaultArea          String?
+  healthDataConsentAt  DateTime?
+  emailNotifications   Boolean   @default(true)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ───────────────────────── Pharmacies ─────────────────────────
+
+model Pharmacy {
+  id                   String             @id @default(cuid())
+  name                 String
+  address              String
+  area                 String
+  town                 String
+  latitude             Float
+  longitude            Float
+  phone                String
+  email                String
+  /// JSON: { mon: {open:"08:00", close:"20:00"} | null, tue: ..., ... }
+  openingHours         Json
+  deliveryAvailable    Boolean            @default(false)
+  deliveryFee          Int                @default(0)
+  deliveryEtaMinutes   Int?
+  verificationStatus   VerificationStatus @default(PENDING)
+  licenseReference     String
+  responsiblePharmacist String
+  businessInfo         String?
+  verificationNote     String?
+  verifiedAt           DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  staff         PharmacyStaff[]
+  inventory     InventoryItem[]
+  reservations  Reservation[]
+  confirmations StockConfirmation[]
+  orders        Order[]
+  prescriptions Prescription[]
+  plans         PharmacyPlan[]
+  impressions   PharmacyImpression[]
+  savedBy       SavedPharmacy[]
+
+  @@index([verificationStatus])
+  @@index([town, area])
+}
+
+model PharmacyStaff {
+  id         String      @id @default(cuid())
+  userId     String
+  pharmacyId String
+  role       StaffRole
+  status     StaffStatus @default(ACTIVE)
+  createdAt  DateTime    @default(now())
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pharmacy   Pharmacy    @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, pharmacyId])
+  @@index([pharmacyId])
+}
+
+model PharmacyPlan {
+  id         String     @id @default(cuid())
+  pharmacyId String
+  planName   String
+  monthlyFee Int
+  status     PlanStatus @default(ACTIVE)
+  startDate  DateTime   @default(now())
+  endDate    DateTime?
+  pharmacy   Pharmacy   @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+
+  @@index([pharmacyId])
+}
+
+// ───────────────────────── Catalogue & inventory ─────────────────────────
+
+model Medicine {
+  id          String         @id @default(cuid())
+  genericName String
+  brandName   String?
+  strength    String
+  dosageForm  String
+  packSize    String
+  description String?
+  status      MedicineStatus @default(ACTIVE)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  inventory     InventoryItem[]
+  reservations  Reservation[]
+  confirmations StockConfirmation[]
+  orderItems    OrderItem[]
+  alerts        AvailabilityAlert[]
+  searchEvents  SearchEvent[]
+
+  @@unique([genericName, brandName, strength, dosageForm, packSize])
+  @@index([genericName])
+}
+
+model InventoryItem {
+  id                 String      @id @default(cuid())
+  pharmacyId         String
+  medicineId         String
+  quantity           Int         @default(0)
+  /// Normal selling price in whole KSh.
+  price              Int
+  /// Pharmacy floor; no promotion may ever go below this.
+  minimumPrice       Int
+  /// Optional DawaFind price (promotion). Must be >= minimumPrice.
+  promoPrice         Int?
+  promotionsEnabled  Boolean     @default(false)
+  stockStatus        StockStatus @default(IN_STOCK)
+  lastStockUpdate    DateTime    @default(now())
+  lastPriceUpdate    DateTime    @default(now())
+  deliveryAvailable  Boolean     @default(false)
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  medicine Medicine @relation(fields: [medicineId], references: [id])
+
+  @@unique([pharmacyId, medicineId])
+  @@index([medicineId, stockStatus])
+}
+
+// ───────────────────────── Patient workflows ─────────────────────────
+
+model StockConfirmation {
+  id                String             @id @default(cuid())
+  patientId         String
+  pharmacyId        String
+  medicineId        String
+  requestedQuantity Int                @default(1)
+  status            ConfirmationStatus @default(PENDING)
+  response          String?
+  confirmedPrice    Int?
+  respondedAt       DateTime?
+  respondedById     String?
+  expiresAt         DateTime
+  createdAt         DateTime           @default(now())
+
+  patient  User     @relation(fields: [patientId], references: [id])
+  pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id])
+  medicine Medicine @relation(fields: [medicineId], references: [id])
+
+  @@index([pharmacyId, status])
+  @@index([patientId])
+}
+
+model Reservation {
+  id         String            @id @default(cuid())
+  patientId  String
+  pharmacyId String
+  medicineId String
+  quantity   Int
+  unitPrice  Int
+  serviceFee Int               @default(0)
+  totalPrice Int
+  status     ReservationStatus @default(PENDING)
+  note       String?
+  expiresAt  DateTime
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  patient  User     @relation(fields: [patientId], references: [id])
+  pharmacy Pharmacy @relation(fields: [pharmacyId], references: [id])
+  medicine Medicine @relation(fields: [medicineId], references: [id])
+  order    Order?
+
+  @@index([pharmacyId, status])
+  @@index([patientId])
+}
+
+model Order {
+  id            String        @id @default(cuid())
+  patientId     String
+  pharmacyId    String
+  reservationId String?       @unique
+  fulfilment    Fulfilment
+  subtotal      Int
+  deliveryFee   Int           @default(0)
+  serviceFee    Int           @default(0)
+  total         Int
+  status        OrderStatus   @default(PENDING)
+  paymentStatus PaymentStatus @default(UNPAID)
+  refundStatus  RefundStatus  @default(NONE)
+  deliveryAddress String?
+  note          String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  completedAt   DateTime?
+
+  patient     User         @relation(fields: [patientId], references: [id])
+  pharmacy    Pharmacy     @relation(fields: [pharmacyId], references: [id])
+  reservation Reservation? @relation(fields: [reservationId], references: [id])
+  items       OrderItem[]
+
+  @@index([pharmacyId, status])
+  @@index([patientId])
+}
+
+model OrderItem {
+  id         String   @id @default(cuid())
+  orderId    String
+  medicineId String
+  quantity   Int
+  unitPrice  Int
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  medicine   Medicine @relation(fields: [medicineId], references: [id])
+
+  @@index([orderId])
+}
+
+model Prescription {
+  id            String             @id @default(cuid())
+  patientId     String
+  /// Pharmacy the patient chose to share this prescription with (null = private to patient).
+  pharmacyId    String?
+  /// Opaque key of the encrypted file in private storage. Never a URL.
+  fileReference String             @unique
+  mimeType      String
+  sizeBytes     Int
+  status        PrescriptionStatus @default(UPLOADED)
+  reviewNote    String?
+  reviewedById  String?
+  uploadedAt    DateTime           @default(now())
+  expiresAt     DateTime
+  deletedAt     DateTime?
+
+  patient  User      @relation(fields: [patientId], references: [id])
+  pharmacy Pharmacy? @relation(fields: [pharmacyId], references: [id])
+
+  @@index([patientId])
+  @@index([pharmacyId, status])
+}
+
+model AvailabilityAlert {
+  id         String      @id @default(cuid())
+  patientId  String
+  medicineId String
+  /// Area key (see lib/areas) or null for anywhere.
+  area       String?
+  status     AlertStatus @default(ACTIVE)
+  createdAt  DateTime    @default(now())
+  notifiedAt DateTime?
+  patient    User        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  medicine   Medicine    @relation(fields: [medicineId], references: [id])
+
+  @@index([medicineId, status])
+}
+
+model SavedPharmacy {
+  patientId  String
+  pharmacyId String
+  createdAt  DateTime @default(now())
+  patient    User     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  pharmacy   Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+
+  @@id([patientId, pharmacyId])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  message   String
+  link      String?
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now())
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read, createdAt])
+}
+
+// ───────────────────────── Analytics & governance ─────────────────────────
+
+model SearchEvent {
+  id                 String   @id @default(cuid())
+  /// Null for anonymous searches. Never linked to prescriptions.
+  userId             String?
+  query              String
+  medicineId         String?
+  area               String?
+  resultCount        Int      @default(0)
+  /// True when at least one VERIFIED pharmacy had a non-stale, available listing.
+  foundVerifiedAvailable Boolean @default(false)
+  createdAt          DateTime @default(now())
+  user               User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  medicine           Medicine? @relation(fields: [medicineId], references: [id])
+
+  @@index([createdAt])
+  @@index([userId, createdAt])
+}
+
+model PharmacyImpression {
+  id         String         @id @default(cuid())
+  pharmacyId String
+  medicineId String?
+  kind       ImpressionKind
+  createdAt  DateTime       @default(now())
+  pharmacy   Pharmacy       @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+
+  @@index([pharmacyId, kind, createdAt])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  entityType String
+  entityId   String?
+  metadata   Json?
+  timestamp  DateTime @default(now())
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([timestamp])
+  @@index([entityType, entityId])
+}
+
+model PlatformSetting {
+  id                        Int @id @default(1)
+  /// Flat DawaFind service fee per transaction, in whole KSh. Always shown to patients.
+  serviceFee                Int @default(20)
+  stockConfirmationTtlMins  Int @default(120)
+  pendingReservationTtlMins Int @default(120)
+  prescriptionRetentionDays Int @default(30)
+}
